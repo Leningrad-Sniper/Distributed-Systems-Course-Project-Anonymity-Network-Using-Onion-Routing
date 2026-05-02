@@ -10,6 +10,12 @@ from onion_routing.crypto_utils import (
     generate_x25519_keypair,
     hybrid_decrypt,
 )
+from onion_routing.crypto_utils import (
+    derive_session_key_from_private_and_peer,
+    sym_encrypt,
+    sym_decrypt,
+)
+import base64
 from onion_routing.transport import read_json, send_json
 
 
@@ -32,6 +38,7 @@ class RelayNode:
         self.capacity = capacity
         self.cell_size = cell_size
         self.private_key, self.public_key_b64 = generate_x25519_keypair()
+        self.sessions: dict[str, bytes] = {}
 
     async def register(self) -> None:
         reader, writer = await asyncio.open_connection(self.directory_host, self.directory_port)
@@ -80,6 +87,47 @@ class RelayNode:
         await writer.wait_closed()
         return response
 
+    async def _handle_handshake_init(self, msg: dict, writer) -> None:
+        ephemeral_pub = msg.get("ephemeral_pub")
+        client_nonce = msg.get("client_nonce")
+        if not ephemeral_pub or not client_nonce:
+            await send_json(writer, {"type": "error", "message": "missing handshake fields"})
+            return
+        session_key = derive_session_key_from_private_and_peer(self.private_key, ephemeral_pub)
+        # store under handshake id = ephemeral_pub
+        handshake_id = ephemeral_pub
+        self.sessions[handshake_id] = session_key
+
+        # decode nonce from base64 then confirm by encrypting raw nonce
+        try:
+            raw_nonce = base64.b64decode(client_nonce.encode("ascii"))
+        except Exception:
+            await send_json(writer, {"type": "error", "message": "invalid nonce encoding"})
+            return
+
+        enc = sym_encrypt(session_key, raw_nonce)
+        await send_json(writer, {"type": "handshake_response", "enc_confirm": enc, "handshake_id": handshake_id})
+
+    async def _handle_handshake_finish(self, msg: dict, writer) -> None:
+        handshake_id = msg.get("handshake_id")
+        enc_finish = msg.get("enc_finish")
+        if not handshake_id or not enc_finish:
+            await send_json(writer, {"type": "error", "message": "missing finish fields"})
+            return
+        session_key = self.sessions.get(handshake_id)
+        if not session_key:
+            await send_json(writer, {"type": "error", "message": "unknown handshake id"})
+            return
+        try:
+            plaintext = sym_decrypt(session_key, enc_finish)
+            if plaintext.decode("utf-8") != "client_confirm":
+                await send_json(writer, {"type": "error", "message": "handshake verification failed"})
+                return
+            await send_json(writer, {"type": "handshake_ok", "handshake_id": handshake_id})
+        except Exception as exc:  # noqa: BLE001
+            await send_json(writer, {"type": "error", "message": f"handshake decrypt failed: {exc}"})
+            return
+
     def _handle_exit_payload(self, payload: dict) -> dict:
         destination = payload.get("destination", "demo://echo")
         message = payload.get("message", "")
@@ -92,7 +140,16 @@ class RelayNode:
         }
 
     async def _process_layer(self, layer: dict) -> dict:
-        session_key = hybrid_decrypt(self.private_key, layer["enc_key"])
+        # support legacy 'enc_key' envelope or handshake-based session ids
+        if "enc_key" in layer:
+            session_key = hybrid_decrypt(self.private_key, layer["enc_key"])
+        elif "handshake_id" in layer:
+            session_key = self.sessions.get(layer["handshake_id"])
+            if session_key is None:
+                raise RuntimeError("unknown handshake id")
+        else:
+            raise RuntimeError("no session key info in layer")
+
         inner = decrypt_cell(session_key, layer["cell"])
 
         if inner.get("next_hop"):
@@ -109,11 +166,16 @@ class RelayNode:
         peer = writer.get_extra_info("peername")
         try:
             msg = await read_json(reader)
-            if msg.get("type") != "onion_cell":
-                await send_json(writer, {"type": "error", "message": "expected onion_cell"})
-            else:
+            mtype = msg.get("type")
+            if mtype == "onion_cell":
                 response = await self._process_layer(msg["layer"])
                 await send_json(writer, response)
+            elif mtype == "handshake_init":
+                await self._handle_handshake_init(msg, writer)
+            elif mtype == "handshake_finish":
+                await self._handle_handshake_finish(msg, writer)
+            else:
+                await send_json(writer, {"type": "error", "message": f"unknown message type {mtype}"})
         except Exception as exc:  # noqa: BLE001
             await send_json(writer, {"type": "error", "message": f"relay error: {exc}"})
             print(f"[{self.relay_id}] error with {peer}: {exc}")

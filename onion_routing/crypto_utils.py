@@ -66,6 +66,24 @@ def hybrid_decrypt(private_key: x25519.X25519PrivateKey, envelope: Dict[str, str
     )
 
 
+def derive_session_key_from_private_and_peer(
+    private: x25519.X25519PrivateKey, peer_public_key_b64: str
+) -> bytes:
+    peer_public = x25519.X25519PublicKey.from_public_bytes(b64d(peer_public_key_b64))
+    shared = private.exchange(peer_public)
+    return _derive_key(shared)
+
+
+def sym_encrypt(session_key: bytes, plaintext: bytes) -> Dict[str, str]:
+    nonce = os.urandom(12)
+    ciphertext = AESGCM(session_key).encrypt(nonce, plaintext, None)
+    return {"nonce": b64e(nonce), "ciphertext": b64e(ciphertext)}
+
+
+def sym_decrypt(session_key: bytes, envelope: Dict[str, str]) -> bytes:
+    return AESGCM(session_key).decrypt(b64d(envelope["nonce"]), b64d(envelope["ciphertext"]), None)
+
+
 def encrypt_cell(
     session_key: bytes,
     payload_obj: Dict[str, Any],

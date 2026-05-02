@@ -5,7 +5,7 @@ Team:
 - Monosij Roy (2023111016)
 - Anurag Peddi (2023101090)
 
-This repository now contains a runnable backbone implementation of your course project with:
+This repository now contains a runnable backbone implementation of your course project, and the main run/test flow has been verified, with:
 - Directory Node
 - Relay Nodes (entry/middle/exit behavior emerges from position in the selected path)
 - Client Proxy
@@ -33,6 +33,11 @@ This repository now contains a runnable backbone implementation of your course p
 - Exit relay creates final response.
 - Intermediate relays wrap the response in reverse layers.
 - Client peels all layers to recover final payload.
+
+5. Run and validation support
+- `run_demo.ps1` starts the directory, relays, and client for a quick demo.
+- `pytest -q` runs the automated crypto and cell-framing tests.
+- `pytest.ini` adds the repository root to `sys.path` so the package imports cleanly during test collection.
 
 ## 2. Project Structure
 
@@ -73,43 +78,72 @@ If execution policy blocks activation in PowerShell:
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 ```
 
-## 5. How To Run (Detailed Team Demo)
+## 5. How To Run
 
-Open 5 terminals in the repository root and run the following.
+1) Run the unit tests:
 
-Terminal 1: Start Directory Node
+```powershell
+pytest -q
+```
+
+2) Quick demo (launches services in separate windows):
+
+```powershell
+.\run_demo.ps1
+```
+
+This opens multiple PowerShell windows: Directory, three Relay processes, and the client run. Watch the client window for the selected path and final response.
+
+3) Manual demo (single-terminal reproducible steps):
+
+- Start the Directory (port 9000):
 
 ```powershell
 python -m onion_routing.directory --host 127.0.0.1 --port 9000
 ```
 
-Terminal 2: Start Relay A
+- Start three relays (each in its own terminal):
 
 ```powershell
-python -m onion_routing.relay --relay-id relayA --host 127.0.0.1 --port 9101 --directory-host 127.0.0.1 --directory-port 9000 --capacity 5
+python -m onion_routing.relay --relay-id relayA --host 127.0.0.1 --port 9101 --directory-host 127.0.0.1 --directory-port 9000 --capacity 5 --cell-size 16384
+python -m onion_routing.relay --relay-id relayB --host 127.0.0.1 --port 9102 --directory-host 127.0.0.1 --directory-port 9000 --capacity 3 --cell-size 16384
+python -m onion_routing.relay --relay-id relayC --host 127.0.0.1 --port 9103 --directory-host 127.0.0.1 --directory-port 9000 --capacity 2 --cell-size 16384
 ```
 
-Terminal 3: Start Relay B
-
-```powershell
-python -m onion_routing.relay --relay-id relayB --host 127.0.0.1 --port 9102 --directory-host 127.0.0.1 --directory-port 9000 --capacity 3
-```
-
-Terminal 4: Start Relay C
-
-```powershell
-python -m onion_routing.relay --relay-id relayC --host 127.0.0.1 --port 9103 --directory-host 127.0.0.1 --directory-port 9000 --capacity 2
-```
-
-Terminal 5: Run Client Proxy
+- Run the client (single-shot):
 
 ```powershell
 python -m onion_routing.client --directory-host 127.0.0.1 --directory-port 9000 --hops 3 --destination demo://echo --message "hello from team demo"
 ```
 
-Expected output from client:
-- Selected relay path (3 hops)
-- Final decrypted response dictionary with status and echo message
+4) Alternative isolated handshake demo (development configuration):
+
+```powershell
+# Directory on 9002 and relays on 9301-9303
+python -m onion_routing.directory --host 127.0.0.1 --port 9002
+python -m onion_routing.relay --relay-id r1 --host 127.0.0.1 --port 9301 --directory-host 127.0.0.1 --directory-port 9002 --capacity 5 --cell-size 16384
+python -m onion_routing.relay --relay-id r2 --host 127.0.0.1 --port 9302 --directory-host 127.0.0.1 --directory-port 9002 --capacity 3 --cell-size 16384
+python -m onion_routing.relay --relay-id r3 --host 127.0.0.1 --port 9303 --directory-host 127.0.0.1 --directory-port 9002 --capacity 2 --cell-size 16384
+python -m onion_routing.client --directory-host 127.0.0.1 --directory-port 9002 --hops 3 --destination demo://echo --message "handshake test" --cell-size 16384
+```
+
+Example expected client output:
+
+```
+[client] selected path:
+  - relayB (127.0.0.1:9102, cap=3)
+  - relayA (127.0.0.1:9101, cap=5)
+  - relayC (127.0.0.1:9103, cap=2)
+[client] final response:
+{'status': 'ok', 'relay': 'relayC', 'destination': 'demo://echo', 'echo': 'hello from team demo', 'note': 'Exit relay delivered payload to demo sink'}
+```
+
+Notes and troubleshooting:
+- Unit tests are under the `tests/` directory and validate the cryptographic primitives and cell framing.
+- If a port is already in use, change the port numbers (for example use 9201/9202/9203) and restart.
+- `run_demo.ps1` launches services in separate windows and does not auto-terminate them; close the windows when finished.
+
+Optionally, a single-terminal orchestrator script can be added to start services as background processes and tear them down automatically after the client completes.
 
 ## 6. Command Reference
 
@@ -132,19 +166,21 @@ python -m onion_routing.client [--directory-host 127.0.0.1] [--directory-port 90
 ```
 
 ## 7. Security Notes (Current Backbone vs Final Goal)
-
 Implemented now:
-- Per-hop hybrid key establishment (ephemeral X25519 + HKDF + AES-GCM envelope)
-- Fixed-size padded entry transport cell (inner recursive layers are compact in this backbone)
-- No relay logs include payload content or IP pair mapping logic by design in code paths
+- Per-hop hybrid key establishment (ephemeral X25519 + HKDF + AES-GCM envelope).
+- Per-hop handshake with explicit key-confirmation steps (client↔relay three-step handshake; confirmations are encrypted and verified).
+- Fixed-size padded entry transport cell combined with compact inner onion layers (avoids exponential padding growth).
+- No relay-side logging of payload contents or IP-pair mappings in current code paths.
+- Unit tests covering crypto primitives and cell framing; `pytest.ini` ensures tests import the package during collection.
 
-Not yet implemented (recommended next milestones):
-- Full circuit-level handshake protocol with explicit key-confirmation steps
-- Guard/exit policy constraints and relay reputation scoring
-- Cover traffic and timing obfuscation beyond fixed-size cells
-- Real exit delivery to external TCP/HTTP destination (currently demo sink)
-- Persistent signed relay descriptors and directory authenticity verification
-- Replay protection and stronger protocol version negotiation
+Remaining work / recommended next milestones:
+- Circuit-level enhancements (session continuity, stronger handshake coverage, and replay protection).
+- Guard/exit policy constraints and relay reputation scoring.
+- Cover traffic, batching, and timing obfuscation beyond fixed-size cells.
+- Real exit delivery to external TCP/HTTP/TCP destinations (current demo uses an internal sink).
+- Persistent signed relay descriptors and directory authenticity verification.
+- Stronger protocol version negotiation and downgrade protections.
+- Additional unit tests (handshake negative cases, relay error handling) and a single-terminal orchestrator to automate demo startup/teardown.
 
 ## 8. Troubleshooting
 
@@ -176,3 +212,6 @@ Run in order:
 4. Observe selected path and final decrypted response.
 
 This baseline is intentionally modular so you can incrementally evolve it into your final report-grade implementation.
+
+
+
