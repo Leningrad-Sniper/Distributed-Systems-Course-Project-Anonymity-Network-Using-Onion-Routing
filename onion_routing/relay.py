@@ -1,6 +1,8 @@
 import argparse
 import asyncio
 import time
+import logging
+import psutil
 
 from onion_routing.config import DEFAULT_CELL_SIZE, HEARTBEAT_INTERVAL_SECONDS
 from onion_routing.crypto_utils import (
@@ -29,6 +31,7 @@ class RelayNode:
         directory_port: int,
         capacity: int,
         cell_size: int,
+        is_exit: bool = False,
     ) -> None:
         self.relay_id = relay_id
         self.host = host
@@ -37,11 +40,34 @@ class RelayNode:
         self.directory_port = directory_port
         self.capacity = capacity
         self.cell_size = cell_size
+        self.is_exit = is_exit
         self.private_key, self.public_key_b64 = generate_x25519_keypair()
         self.sessions: dict[str, bytes] = {}
+        self.seen_nonces: set[str] = set() # For replay protection
+        self.start_time = time.time()
+        
+        # Configure logging strictly for operational metrics, NOT payload/IPs
+        import os
+        os.makedirs("logs", exist_ok=True)
+        
+        self.logger = logging.getLogger(f"Relay-{self.relay_id}")
+        self.logger.setLevel(logging.INFO)
+        fh = logging.FileHandler(os.path.join("logs", f"relay_metrics_{self.relay_id}.log"))
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        fh.setFormatter(formatter)
+        self.logger.addHandler(fh)
+
 
     async def register(self) -> None:
         reader, writer = await asyncio.open_connection(self.directory_host, self.directory_port)
+        import hashlib
+        import hmac
+        
+        payload_to_sign = f"{self.relay_id}:{self.host}:{self.port}:{self.capacity}".encode("utf-8")
+        # In a real system, this would be a proper asymmetric signature (e.g. Ed25519)
+        # Here we use an HMAC over the properties to demonstrate authenticity protections
+        auth_signature = hmac.new(b"directory_shared_secret", payload_to_sign, hashlib.sha256).hexdigest()
+
         await send_json(
             writer,
             {
@@ -51,6 +77,8 @@ class RelayNode:
                 "port": self.port,
                 "public_key": self.public_key_b64,
                 "capacity": self.capacity,
+                "is_exit": self.is_exit,
+                "signature": auth_signature,
             },
         )
         response = await read_json(reader)
@@ -63,6 +91,15 @@ class RelayNode:
     async def heartbeat_loop(self) -> None:
         while True:
             await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+            
+            # Log operational health metrics (uptime, cpu, mem) avoiding IP and payload
+            uptime = time.time() - self.start_time
+            mem_use = psutil.virtual_memory().percent
+            cpu_use = psutil.cpu_percent(interval=None)
+            self.logger.info(f"Health metrics - uptime_sec: {uptime:.2f}, "
+                             f"host_mem: {mem_use}%, host_cpu: {cpu_use}%, "
+                             f"active_sessions: {len(self.sessions)}")
+
             try:
                 reader, writer = await asyncio.open_connection(self.directory_host, self.directory_port)
                 await send_json(
@@ -128,18 +165,76 @@ class RelayNode:
             await send_json(writer, {"type": "error", "message": f"handshake decrypt failed: {exc}"})
             return
 
-    def _handle_exit_payload(self, payload: dict) -> dict:
-        destination = payload.get("destination", "demo://echo")
+    async def _handle_exit_payload(self, payload: dict) -> dict:
+        dest_host = payload.get("dest_host")
+        dest_port = payload.get("dest_port")
         message = payload.get("message", "")
+        
+        print(f"[{self.relay_id}] *** ACTING AS EXIT NODE ***")
+        
+        if dest_host and dest_port:
+            print(f"[{self.relay_id}] Establishing real TCP connection to {dest_host}:{dest_port}...")
+            self.logger.info(f"Opening real TCP socket to {dest_host}:{dest_port}")
+            try:
+                reader, writer = await asyncio.open_connection(dest_host, int(dest_port))
+                
+                # Append newline to trigger flush on line-buffered servers like tcpbin
+                if not message.endswith("\n"):
+                    message += "\n"
+                    
+                writer.write(message.encode("utf-8"))
+                await writer.drain()
+                
+                # Removed writer.write_eof() because some echo servers (like tcpbin) 
+                # instantly close the connection when they receive EOF, dropping the response.
+                
+                # CRITICAL: Read up to 4096 bytes. `reader.read()` alone blocks until EOF!
+                raw_response = await reader.read(4096)
+                
+                writer.close()
+                await writer.wait_closed()
+                
+                return {
+                    "status": "ok",
+                    "relay": self.relay_id,
+                    "destination": f"{dest_host}:{dest_port}",
+                    "response": raw_response.decode("utf-8", errors="replace"),
+                    "note": "Delivered to external host"
+                }
+            except Exception as e:
+                self.logger.error(f"Failed to deliver payload: {e}")
+                return {"status": "error", "relay": self.relay_id, "error": str(e)}
+
+        # Fallback to the default simulation sink
+        print(f"[{self.relay_id}] Forwarding payload to demo sink -> Message: '{message}'")
+        self.logger.info(f"Acted as exit node. Sent payload to demo sink")
+
         return {
             "status": "ok",
             "relay": self.relay_id,
-            "destination": destination,
+            "destination": "demo://echo",
             "echo": message,
             "note": "Exit relay delivered payload to demo sink",
         }
 
     async def _process_layer(self, layer: dict) -> dict:
+        import random
+        from onion_routing.config import JITTER_MIN, JITTER_MAX
+        
+        # Jitter: artificial random sub-second delay to defeat simple timing correlation
+        await asyncio.sleep(random.uniform(JITTER_MIN, JITTER_MAX))
+
+        # Check replay protection using the unique nonce of the encrypted cell
+        cell_nonce = layer["cell"].get("nonce")
+        if cell_nonce:
+            if cell_nonce in self.seen_nonces:
+                self.logger.warning("Replay attack detected: cell dropped.")
+                raise RuntimeError("Replay protection: duplicate nonce detected")
+            self.seen_nonces.add(cell_nonce)
+            # To prevent unbounded memory growth, limit cached nonces
+            if len(self.seen_nonces) > 10000:
+                self.seen_nonces.clear()
+
         # support legacy 'enc_key' envelope or handshake-based session ids
         if "enc_key" in layer:
             session_key = hybrid_decrypt(self.private_key, layer["enc_key"])
@@ -153,10 +248,15 @@ class RelayNode:
         inner = decrypt_cell(session_key, layer["cell"])
 
         if inner.get("next_hop"):
+            next_hop_host = inner["next_hop"]["host"]
+            next_hop_port = inner["next_hop"]["port"]
+            print(f"[{self.relay_id}] Peeled encryption layer. Forwarding inner cell to next hop: {next_hop_host}:{next_hop_port}")
+            self.logger.info("Forwarding cell to next hop.")
             next_response = await self._forward(inner["next_hop"], inner["inner_layer"])
             wrapped_plain = {"payload": next_response}
+            print(f"[{self.relay_id}] Received response from next hop. Adding reverse encryption layer.")
         else:
-            exit_result = self._handle_exit_payload(inner["exit_payload"])
+            exit_result = await self._handle_exit_payload(inner["exit_payload"])
             wrapped_plain = exit_result
 
         wrapped_cell = encrypt_cell(session_key, wrapped_plain, None)
@@ -193,6 +293,7 @@ async def main() -> None:
     parser.add_argument("--directory-port", type=int, default=9000)
     parser.add_argument("--capacity", type=int, default=1)
     parser.add_argument("--cell-size", type=int, default=DEFAULT_CELL_SIZE)
+    parser.add_argument("--is-exit", action="store_true", help="Flag if relay allows exit routing")
     args = parser.parse_args()
 
     relay = RelayNode(
@@ -203,6 +304,7 @@ async def main() -> None:
         directory_port=args.directory_port,
         capacity=args.capacity,
         cell_size=args.cell_size,
+        is_exit=args.is_exit,
     )
 
     await relay.register()

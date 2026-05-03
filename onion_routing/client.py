@@ -96,16 +96,33 @@ async def perform_handshake(relay: dict) -> tuple[bytes, str]:
 
 
 def weighted_path_selection(relays: list[dict[str, Any]], hops: int) -> list[dict[str, Any]]:
+    # Filter for nodes that allow exiting for the final hop
+    exit_relays = [r for r in relays if r.get("is_exit", False)]
+    if not exit_relays:
+        print("[client] Warning: No explicit exit nodes found, relying on generic network relays.")
+        exit_relays = relays[:]
+
     if len(relays) < hops:
         raise RuntimeError(f"Need at least {hops} active relays, found {len(relays)}")
 
     pool = relays[:]
     selected = []
-    for _ in range(hops):
+    
+    # 1. Select the Exit Hop first from allowed exits
+    exit_weights = [max(1, int(relay.get("capacity", 1))) for relay in exit_relays]
+    exit_node = random.choices(exit_relays, weights=exit_weights, k=1)[0]
+    selected.append(exit_node)
+    
+    # Remove chosen exit from the generic pool
+    pool = [r for r in pool if r["relay_id"] != exit_node["relay_id"]]
+
+    # 2. Select remaining hops (middle -> entry)
+    for _ in range(hops - 1):
         weights = [max(1, int(relay.get("capacity", 1))) for relay in pool]
         chosen = random.choices(pool, weights=weights, k=1)[0]
-        selected.append(chosen)
+        selected.insert(0, chosen) # Prepend so path goes Entry -> Middle -> Exit
         pool = [relay for relay in pool if relay["relay_id"] != chosen["relay_id"]]
+        
     return selected
 
 
@@ -114,6 +131,8 @@ def build_onion(
     destination: str,
     message: str,
     cell_size: int,
+    dest_host: str = None,
+    dest_port: int = None,
 ) -> tuple[dict, dict[str, bytes]]:
     session_keys: dict[str, bytes] = {}
     inner_layer = None
@@ -132,6 +151,8 @@ def build_onion(
                 "next_hop": None,
                 "exit_payload": {
                     "destination": destination,
+                    "dest_host": dest_host,
+                    "dest_port": dest_port,
                     "message": message,
                 },
             }
@@ -146,8 +167,10 @@ def build_onion(
         handshake_id = relay.get("handshake_id")
         if not handshake_id:
             raise RuntimeError(f"missing handshake id for relay {relay['relay_id']}")
-        current_cell_size = cell_size if idx == 0 else None
-        enc_cell = encrypt_cell(session_keys[relay["relay_id"]], plain, current_cell_size)
+        
+        # We no longer strictly need current_cell_size padding here as transport.py 
+        # pads all outward JSON responses to DEFAULT_CELL_SIZE ensuring wire uniformity.
+        enc_cell = encrypt_cell(session_keys[relay["relay_id"]], plain, None)
         inner_layer = {"handshake_id": handshake_id, "cell": enc_cell}
 
     return inner_layer, session_keys
@@ -174,6 +197,8 @@ async def main() -> None:
     parser.add_argument("--destination", default="demo://echo")
     parser.add_argument("--message", default="hello from onion client")
     parser.add_argument("--cell-size", type=int, default=DEFAULT_CELL_SIZE)
+    parser.add_argument("--dest-host", default=None, help="The real host to forward traffic to")
+    parser.add_argument("--dest-port", type=int, default=None, help="The real port to forward traffic to")
     args = parser.parse_args()
 
     relays = await fetch_relays(args.directory_host, args.directory_port)
@@ -190,7 +215,7 @@ async def main() -> None:
     for relay in path:
         print(f"  - {relay['relay_id']} ({relay['host']}:{relay['port']}, cap={relay['capacity']})")
 
-    onion_layer, session_keys = build_onion(path, args.destination, args.message, args.cell_size)
+    onion_layer, session_keys = build_onion(path, args.destination, args.message, args.cell_size, args.dest_host, args.dest_port)
 
     entry = path[0]
     reader, writer = await asyncio.open_connection(entry["host"], int(entry["port"]))
