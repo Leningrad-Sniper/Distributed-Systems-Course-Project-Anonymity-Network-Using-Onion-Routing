@@ -19,7 +19,7 @@ def start_process(command, log_file=None):
 def main():
     parser = argparse.ArgumentParser(description="Anonymity Network Driver")
     parser.add_argument("--dir-host", default="127.0.0.1", help="Directory node host")
-    parser.add_argument("--dir-port", type=int, default=9000, help="Directory node port")
+    parser.add_argument("--dir-port", type=int, default=9090, help="Directory node port")
     parser.add_argument("--num-relays", type=int, default=3, help="Number of relays to start")
     parser.add_argument("--hops", type=int, default=3, help="Number of hops for the client")
     parser.add_argument("--message", default="hello from team demo", help="Message for client to send")

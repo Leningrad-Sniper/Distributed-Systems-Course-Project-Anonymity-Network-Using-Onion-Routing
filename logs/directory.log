@@ -1,0 +1,9 @@
+[directory] listening on 127.0.0.1:9090
+[directory] Registering relay: relay2 from ('127.0.0.1', 53454)
+[directory] Registering relay: relay3 from ('127.0.0.1', 53456)
+[directory] Registering relay: relay1 from ('127.0.0.1', 53458)
+[directory] handled request from ('127.0.0.1', 53454)
+[directory] handled request from ('127.0.0.1', 53456)
+[directory] handled request from ('127.0.0.1', 53458)
+[directory] Client requested relay list from ('127.0.0.1', 50022)
+[directory] handled request from ('127.0.0.1', 50022)

@@ -1,0 +1,5 @@
+[relay3] registered with directory
+[relay3] listening on 127.0.0.1:9103
+[relay3] public_key=ERAXm6k1qV/Bw/j1ra9AhzcBmPdhAOyJtSqc2L8A9jM=
+[relay3] *** ACTING AS EXIT NODE ***
+[relay3] Forwarding payload to demo sink -> Message: 'Secret payload via onion network'
