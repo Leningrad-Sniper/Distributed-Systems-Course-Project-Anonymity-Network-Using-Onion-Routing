@@ -1,11 +1,9 @@
 # Anonymity Network Using Onion Routing
 
-Team:
+Team 🙈🙉🙊:
 - Sudheera Y S (2023111002)
 - Monosij Roy (2023111016)
 - Anurag Peddi (2023101090)
-
-This repository contains a full, runnable implementation of the **Anonymity Network via Onion Routing** project as outlined in the proposal. It supports all the specified features, including a directory node, multiple relays, dynamic weighted path selection, multi-layered encryption with a secure asymmetric handshake (X25519), and mechanisms for mitigating traffic analysis.
 
 ## Features Implemented
 1. **Directory Node & Authenticity**: Tracks active relays, their keys, capacities, and liveness. Enforces cryptographic HMAC signatures to prevent relay spoofing/hijacking.
@@ -37,7 +35,7 @@ This repository contains a full, runnable implementation of the **Anonymity Netw
 ├── requirements.txt    # Project dependencies
 ├── tests/              # Pytest crypto + unit coverage
 ├── README.md           # Project documentation
-└── Final_Report.md     # Academic protocol submission report
+└── Final_Report.md     # Final Report
 ```
 
 ## Prerequisites
@@ -115,10 +113,10 @@ The code reads constants directly from the `.env` settings file dynamically. You
 ## Running Tests
 Run the comprehensive `pytest` test suite covering cryptographic primitives and framing features.
 ```bash
-pytest -q
+python -m pytest tests
 ```
 
-## Deliverables Met
+## Deliverables
 1. **Source Code**: Provided fully under `onion_routing/`. All required components are heavily structured and loosely coupled for simple maintenance.
 2. **Demonstration**: Run `driver.py` to seamlessly demonstrate establishing an anonymous connection through directory, 3 relay nodes, completing successfully end-to-end to an external server or internal sink logic.
 3. **Final Report**: Added `Final_Report.md` exhaustively outlining every protection scheme alongside code documentation.

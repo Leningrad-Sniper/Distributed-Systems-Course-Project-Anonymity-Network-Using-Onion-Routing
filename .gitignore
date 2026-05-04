@@ -1,1 +1,7 @@
 .venv
+venv
+*Proposal*
+__pycache__
+*.pyc
+.gitignore
+.pytest_cache

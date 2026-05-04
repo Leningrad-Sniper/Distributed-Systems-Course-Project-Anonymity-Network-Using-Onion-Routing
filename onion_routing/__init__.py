@@ -1,1 +1,1 @@
-"""Onion routing course-project backbone."""
+"""Project backbone"""

@@ -54,3 +54,12 @@ def test_cell_encrypt_decrypt_fixed():
     enc = encrypt_cell(key, obj, 256)
     dec = decrypt_cell(key, enc)
     assert dec == obj
+
+import pytest
+def test_cell_encryption_size_constraint():
+    """Guarantee an error throws if an inner packet forces out the size boundary."""
+    key = os.urandom(32)
+    large_payload = {"pad": "X" * 1000}
+    with pytest.raises(ValueError):
+        # Enforcing a 512 byte limit should break on a 1000+ byte dict
+        encrypt_cell(key, large_payload, cell_size=512)

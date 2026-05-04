@@ -1,5 +1,5 @@
 [relay1] registered with directory
 [relay1] listening on 127.0.0.1:9101
-[relay1] public_key=1PbQ2/ycZN852HD2ryNzCLQVnFJfyt8a4hLFw9ZLcz0=
-[relay1] Peeled encryption layer. Forwarding inner cell to next hop: 127.0.0.1:9103
+[relay1] public_key=s2inXA4zF1pE7ATFKgKEaFQJk/2ByavIMq//btuVgEc=
+[relay1] Peeled encryption layer. Forwarding inner cell to next hop: 127.0.0.1:9102
 [relay1] Received response from next hop. Adding reverse encryption layer.
